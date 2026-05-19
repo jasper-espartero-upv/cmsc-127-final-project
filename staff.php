@@ -136,12 +136,12 @@ include 'DBConnector.php';
                 <th>Name</th>
                 <th>Role</th>
                 <th>Username</th>
-            </tr>
+                <th>Password</th> </tr>
         </thead>
         <tbody>
             <?php
             // Fetch data from the staff table
-            $sql = "SELECT staff_ID, first_name, last_name, role, username FROM staff";
+            $sql = "SELECT staff_ID, first_name, last_name, role, username, password FROM staff";
             $result = $conn->query($sql);
 
             if ($result->num_rows > 0) {
@@ -157,10 +157,11 @@ include 'DBConnector.php';
                     echo "<td>" . $fullName . "</td>";
                     echo "<td>" . $role . "</td>";
                     echo "<td>" . htmlspecialchars($row['username']) . "</td>";
+                    echo "<td>" . htmlspecialchars($row['password']) . "</td>"; // Added password display cell
                     echo "</tr>";
                 }
             } else {
-                echo "<tr><td colspan='4'>No staff members found</td></tr>";
+                echo "<tr><td colspan='5'>No staff members found</td></tr>"; // Changed colspan to 5
             }
             
             $conn->close();
