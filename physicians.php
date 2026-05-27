@@ -1,11 +1,6 @@
 <?php
 require_once 'DBConnector.php';
 
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
 session_start();
 $logged_in_staff = $_SESSION['staff_ID'] ?? 2; // Falls back to 2 (Jose Reyes) if no session exists
 
@@ -431,7 +426,10 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
         <div class="top-nav-tabs">
             <a href="patients.php" class="tab inactive">Patients</a>
             <a href="physicians.php" class="tab active">Physicians</a>
-            <a href="staff.php" class="tab inactive">Staff</a>
+            
+            <?php if (isset($_SESSION['staff_role']) && strtolower($_SESSION['staff_role']) === 'admin'): ?>
+                <a href="staff.php" class="tab inactive">Staff</a>
+            <?php endif; ?>
         </div>
     </div>
     <div style="display:flex;align-items:center;gap:14px;">

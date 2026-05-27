@@ -1,11 +1,6 @@
 <?php
 require_once 'DBConnector.php';
 
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
 session_start();
 $logged_in_staff = $_SESSION['staff_ID'] ?? 2; // Falls back to 2 (Jose Reyes) if no session exists
 
@@ -117,11 +112,9 @@ $filter_staff = (int)($_GET['staff_id']             ?? 0);
 $conditions = [];
 
 if ($search !== '') {
-    $is_numeric_search = ctype_digit($search);
-    $id_condition      = $is_numeric_search ? "p.patient_ID = " . (int)$search . " OR" : '';
     $conditions[] = "(
-        $id_condition
-        p.first_name LIKE '%$search%'
+        p.patient_ID LIKE '%$search%'
+        OR p.first_name LIKE '%$search%'
         OR p.last_name  LIKE '%$search%'
         OR CONCAT(p.first_name,' ',p.last_name) LIKE '%$search%'
         OR p.contact_number LIKE '%$search%'
@@ -469,7 +462,10 @@ textarea.form-control { resize:vertical; min-height:80px; }
         <div class="top-nav-tabs">
             <a href="patients.php" class="tab active">Patients</a>
             <a href="physicians.php" class="tab inactive">Physicians</a>
-            <a href="staff.php" class="tab inactive">Staff</a>
+            
+            <?php if (isset($_SESSION['staff_role']) && strtolower($_SESSION['staff_role']) === 'admin'): ?>
+                <a href="staff.php" class="tab inactive">Staff</a>
+            <?php endif; ?>
         </div>
     </div>
     <div style="display:flex;align-items:center;gap:14px;">
@@ -495,7 +491,7 @@ textarea.form-control { resize:vertical; min-height:80px; }
                 <input
                     type="text" name="search" id="searchInput"
                     class="search-input"
-                    placeholder="Name, ID, Affiliation..."
+                    placeholder="Name, ID, affiliation..."
                     value="<?= htmlspecialchars($search) ?>"
                     autocomplete="off"
                 >

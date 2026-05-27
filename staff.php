@@ -1,17 +1,19 @@
 <?php
 require_once 'DBConnector.php';
 
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
 session_start();
 if (!isset($_SESSION['staff_ID'])) {
     header('Location: login.php');
     exit;
 }
 $logged_in_staff = $_SESSION['staff_ID'];
+
+if (!isset($_SESSION['staff_role']) || strtolower($_SESSION['staff_role']) !== 'admin') {
+    $_SESSION['error_message'] = "Unauthorized access. Admins only."; 
+    
+    header('Location: patients.php');
+    exit;
+}
 
 function sanitize($conn, $val) {
     return $conn->real_escape_string(trim($val));
