@@ -109,20 +109,59 @@ if ($action === 'delete' && isset($_GET['id'])) {
 }
 
 // DATA QUERY: FETCH PATIENTS LIST
-$search = sanitize($conn, $_GET['search'] ?? '');
-$where  = '';
+$search       = sanitize($conn, $_GET['search']     ?? '');
+$filter_sort  = sanitize($conn, $_GET['sort']       ?? 'name_az');
+$filter_date  = sanitize($conn, $_GET['date_range'] ?? '');
+$filter_staff = (int)($_GET['staff_id']             ?? 0);
+
+$conditions = [];
+
 if ($search !== '') {
-    $where = "WHERE
-        patient_ID LIKE '%$search%'
-        OR first_name LIKE '%$search%'
-        OR last_name LIKE '%$search%'
-        OR CONCAT(first_name,' ',last_name) LIKE '%$search%'
-        OR contact_number LIKE '%$search%'
-        OR affiliation LIKE '%$search%'";
+    $conditions[] = "(
+        p.patient_ID LIKE '%$search%'
+        OR p.first_name LIKE '%$search%'
+        OR p.last_name  LIKE '%$search%'
+        OR CONCAT(p.first_name,' ',p.last_name) LIKE '%$search%'
+        OR p.contact_number LIKE '%$search%'
+        OR p.affiliation LIKE '%$search%'
+    )";
 }
 
-$patients_sql = "SELECT * FROM patient $where ORDER BY last_name ASC, first_name ASC";
+if ($filter_date === 'last_week') {
+    $conditions[] = "p.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+} elseif ($filter_date === 'last_month') {
+    $conditions[] = "p.created_at >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)";
+}
+
+if ($filter_staff > 0) {
+    $conditions[] = "p.created_by = $filter_staff";
+}
+
+$where = count($conditions) ? 'WHERE ' . implode(' AND ', $conditions) : '';
+
+$order = match($filter_sort) {
+    'name_za'       => 'p.last_name DESC, p.first_name DESC',
+    'age_youngest'  => 'p.birthdate DESC',
+    'age_oldest'    => 'p.birthdate ASC',
+    default         => 'p.last_name ASC, p.first_name ASC',   // name_az
+};
+
+$patients_sql    = "SELECT p.*, CONCAT(s.first_name,' ',s.last_name) AS created_by_name
+                    FROM patient p
+                    LEFT JOIN staff s ON p.created_by = s.staff_ID
+                    $where
+                    ORDER BY $order";
 $patients_result = $conn->query($patients_sql);
+
+// Active filter count
+$active_filters = 0;
+if ($filter_sort  !== 'name_az') $active_filters++;
+if ($filter_date  !== '')        $active_filters++;
+if ($filter_staff > 0)           $active_filters++;
+
+// Fetch staff list for "Created By" dropdown
+$staff_result = $conn->query("SELECT staff_ID, CONCAT(first_name,' ',last_name) AS full_name FROM staff ORDER BY last_name");
+$staff_list   = $staff_result ? $staff_result->fetch_all(MYSQLI_ASSOC) : [];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -348,6 +387,76 @@ textarea.form-control { resize:vertical; min-height:80px; }
     border-radius:50%; animation:spin .6s linear infinite; margin:0 auto;
 }
 @keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── FILTER PANEL ── */
+.filter-panel {
+    display: none;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    animation: slideIn .15s ease;
+}
+.filter-panel.open { display: block; }
+.filter-panel-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin-bottom: 16px;
+}
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    align-items: end;
+}
+.filter-group { display: flex; flex-direction: column; gap: 6px; }
+.filter-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+}
+.filter-select {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    outline: none;
+    transition: border-color .15s;
+    cursor: pointer;
+}
+.filter-select:focus { border-color: var(--ink); }
+.filter-actions { display: flex; gap: 8px; align-items: flex-end; padding-top: 2px; }
+.filter-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    background: var(--danger);
+    color: #fff;
+    border-radius: 50%;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+.btn-filter {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
 </style>
 </head>
 <body>
@@ -357,12 +466,19 @@ textarea.form-control { resize:vertical; min-height:80px; }
         <span class="topbar-brand">UPV · HSU</span>
         <div class="top-nav-tabs">
             <a href="patients.php" class="tab active">Patients</a>
-            <a href="patient_visits.php" class="tab inactive">Patient Visits</a>
             <a href="physicians.php" class="tab inactive">Physicians</a>
             <a href="staff.php" class="tab inactive">Staff</a>
         </div>
     </div>
-    <a href="#" class="btn-home">Home</a>
+    <div style="display:flex;align-items:center;gap:14px;">
+        <span style="font-family:var(--mono);font-size:11px;opacity:.6;letter-spacing:.06em;">
+            <?= htmlspecialchars($_SESSION['staff_name'] ?? '') ?>
+            &nbsp;·&nbsp;
+            <?= htmlspecialchars(strtoupper($_SESSION['staff_role'] ?? '')) ?>
+        </span>
+        <a href="index.php" class="btn-home">Home</a>
+        <a href="logout.php" class="btn-home" style="background:transparent;color:var(--accent-fg);border:1.5px solid rgba(244,241,235,.3);">Logout</a>
+    </div>
 </div>
 
 <div class="main">
@@ -370,7 +486,7 @@ textarea.form-control { resize:vertical; min-height:80px; }
     <div class="toast toast-<?= $msgType ?>"><?= htmlspecialchars($message) ?></div>
     <?php endif; ?>
 
-    <form method="GET" action="">
+    <form method="GET" action="patients.php" id="filterForm">
         <div class="toolbar">
             <div class="search-wrap">
                 <span class="search-label">Search</span>
@@ -383,11 +499,69 @@ textarea.form-control { resize:vertical; min-height:80px; }
                 >
                 <button type="submit" class="btn-search" title="Search">&#9906;</button>
             </div>
-            <?php if ($search): ?>
-            <a href="patients.php" class="btn btn-outline" style="padding:8px 14px;font-size:11px;">✕ Clear</a>
+
+            <!-- Filter toggle button -->
+            <button type="button" class="btn btn-outline btn-filter" onclick="toggleFilters()" id="btnFilter">
+                ⊟ Filters
+                <?php if ($active_filters > 0): ?>
+                <span class="filter-badge"><?= $active_filters ?></span>
+                <?php endif; ?>
+            </button>
+
+            <?php if ($search || $active_filters > 0): ?>
+            <a href="patients.php" class="btn btn-outline" style="padding:8px 14px;font-size:11px;">✕ Clear All</a>
             <?php endif; ?>
+
             <div class="spacer"></div>
             <button type="button" class="btn btn-primary" onclick="openAdd()">+ Add Patient</button>
+        </div>
+
+        <!-- FILTER PANEL -->
+        <div class="filter-panel <?= $active_filters > 0 ? 'open' : '' ?>" id="filterPanel">
+            <div class="filter-panel-title">Filter &amp; Sort</div>
+            <div class="filter-grid">
+
+                <!-- Sort order -->
+                <div class="filter-group">
+                    <label class="filter-label">Sort By</label>
+                    <select name="sort" class="filter-select" onchange="this.form.submit()">
+                        <option value="name_az"      <?= $filter_sort === 'name_az'      ? 'selected' : '' ?>>Name: A → Z</option>
+                        <option value="name_za"      <?= $filter_sort === 'name_za'      ? 'selected' : '' ?>>Name: Z → A</option>
+                        <option value="age_youngest" <?= $filter_sort === 'age_youngest' ? 'selected' : '' ?>>Age: Youngest First</option>
+                        <option value="age_oldest"   <?= $filter_sort === 'age_oldest'   ? 'selected' : '' ?>>Age: Oldest First</option>
+                    </select>
+                </div>
+
+                <!-- Date added range -->
+                <div class="filter-group">
+                    <label class="filter-label">Date Added</label>
+                    <select name="date_range" class="filter-select" onchange="this.form.submit()">
+                        <option value=""           <?= $filter_date === ''           ? 'selected' : '' ?>>All Time</option>
+                        <option value="last_week"  <?= $filter_date === 'last_week'  ? 'selected' : '' ?>>Last 7 Days</option>
+                        <option value="last_month" <?= $filter_date === 'last_month' ? 'selected' : '' ?>>Last 30 Days</option>
+                    </select>
+                </div>
+
+                <!-- Filter by staff (created by) -->
+                <div class="filter-group">
+                    <label class="filter-label">Created By</label>
+                    <select name="staff_id" class="filter-select" onchange="this.form.submit()">
+                        <option value="0">All Staff</option>
+                        <?php foreach ($staff_list as $s): ?>
+                        <option value="<?= $s['staff_ID'] ?>" <?= $filter_staff === (int)$s['staff_ID'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($s['full_name']) ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <!-- Apply / Reset -->
+                <div class="filter-actions">
+                    <button type="submit" class="btn btn-primary" style="padding:8px 16px;font-size:11px;">Apply</button>
+                    <a href="patients.php<?= $search ? '?search='.urlencode($search) : '' ?>" class="btn btn-outline" style="padding:8px 16px;font-size:11px;">Reset Filters</a>
+                </div>
+
+            </div>
         </div>
     </form>
 
@@ -455,7 +629,37 @@ textarea.form-control { resize:vertical; min-height:80px; }
         <div class="table-footer">
             <span>
                 <?php if ($search): ?>
-                    Results for: <strong><?= htmlspecialchars($search) ?></strong> &nbsp;·&nbsp;
+                    Results for: <strong><?= htmlspecialchars($search) ?></strong>
+                    <?php if ($active_filters > 0): ?> &nbsp;·&nbsp; <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($filter_sort !== 'name_az'): ?>
+                    Sort: <strong><?= match($filter_sort) {
+                        'name_za'      => 'Name Z→A',
+                        'age_youngest' => 'Age: Youngest First',
+                        'age_oldest'   => 'Age: Oldest First',
+                        default        => ''
+                    } ?></strong>
+                    <?php if ($filter_date || $filter_staff): ?> &nbsp;·&nbsp; <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($filter_date): ?>
+                    Date Added: <strong><?= $filter_date === 'last_week' ? 'Last 7 Days' : 'Last 30 Days' ?></strong>
+                    <?php if ($filter_staff): ?> &nbsp;·&nbsp; <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($filter_staff): ?>
+                    <?php
+                        $staff_name = '';
+                        foreach ($staff_list as $s) {
+                            if ((int)$s['staff_ID'] === $filter_staff) {
+                                $staff_name = $s['full_name'];
+                                break;
+                            }
+                        }
+                    ?>
+                    Created By: <strong><?= htmlspecialchars($staff_name) ?></strong>
+                    &nbsp;·&nbsp;
+                <?php endif; ?>
+                <?php if (!$search && !$active_filters): ?>
+                    All records &nbsp;·&nbsp;
                 <?php endif; ?>
                 <?= $count ?> record<?= $count !== 1 ? 's' : '' ?>
             </span>
@@ -566,6 +770,12 @@ textarea.form-control { resize:vertical; min-height:80px; }
 </div>
 
 <script>
+// FILTER PANEL TOGGLE
+function toggleFilters() {
+    const panel = document.getElementById('filterPanel');
+    panel.classList.toggle('open');
+}
+
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
