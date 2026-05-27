@@ -35,27 +35,6 @@ $action  = $_POST['action'] ?? $_GET['action'] ?? '';
 $message = '';
 $msgType = 'success';
 
-// ADD
-if ($action === 'add' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $patient_id   = (int)$_POST['patient_id'];
-    $physician_id = (int)$_POST['physician_id'];
-    $visit_date   = sanitize($conn, $_POST['visit_date']);
-    $symptoms     = sanitize($conn, $_POST['symptoms']);
-    $prescription = sanitize($conn, $_POST['prescription']);
-    $today        = date('Y-m-d');
-
-    $sql = "INSERT INTO patient_visits
-              (symptoms_description, prescription_details, visit_date, created_at, updated_at, patient_ID, physician_ID, created_by)
-            VALUES
-              ('$symptoms','$prescription','$visit_date','$today','$today',$patient_id,$physician_id,$logged_in_staff)";
-    if ($conn->query($sql)) {
-        $message = "Visit record added successfully.";
-    } else {
-        $message = "Error adding record: " . $conn->error;
-        $msgType = 'error';
-    }
-}
-
 // EDIT — re-fetches the existing record from DB first to ensure we're working with real data
 if ($action === 'edit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $visit_id     = (int)$_POST['visit_id'];
@@ -117,18 +96,21 @@ $conditions = [];
 
 // Search term
 if ($search !== '') {
+    $is_numeric_search = ctype_digit($search);
+    $id_condition      = $is_numeric_search ? "pv.visit_ID = " . (int)$search . " OR" : '';
+    $text_conditions = $is_numeric_search ? '' : "
+        OR pv.symptoms_description LIKE '%$search%'
+        OR pv.prescription_details LIKE '%$search%'";
     $conditions[] = "(
-        pv.visit_ID LIKE '%$search%'
-        OR p.first_name  LIKE '%$search%'
+        $id_condition
+        p.first_name  LIKE '%$search%'
         OR p.last_name   LIKE '%$search%'
         OR CONCAT(p.first_name,' ',p.last_name) LIKE '%$search%'
         OR ph.first_name LIKE '%$search%'
         OR ph.last_name  LIKE '%$search%'
         OR CONCAT(ph.first_name,' ',ph.last_name) LIKE '%$search%'
-        OR pv.visit_date LIKE '%$search%'
-        OR pv.symptoms_description LIKE '%$search%'
-        OR pv.prescription_details LIKE '%$search%'
         OR p.affiliation LIKE '%$search%'
+        $text_conditions
     )";
 }
 
@@ -507,7 +489,7 @@ textarea.form-control { resize:vertical; min-height:80px; }
             <?php endif; ?>
 
             <div class="spacer"></div>
-            <button type="button" class="btn btn-primary" onclick="openAdd()">+ Add Visit</button>
+            <a href="new_visit.php" class="btn btn-primary">+ Add Visit</a>
         </div>
 
         <!-- FILTER PANEL -->
@@ -659,57 +641,6 @@ textarea.form-control { resize:vertical; min-height:80px; }
 </div>
 
 
-<!-- ADD MODAL -->
-<div class="modal-overlay" id="modalAdd">
-    <div class="modal">
-        <div class="modal-header">
-            <span class="modal-title">Add Visit Record</span>
-            <button class="modal-close" onclick="closeModal('modalAdd')">✕</button>
-        </div>
-        <form method="POST" action="patient_visits.php<?= $search ? '?search='.urlencode($search) : '' ?>">
-            <input type="hidden" name="action" value="add">
-            <div class="modal-body">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label class="form-label">Patient *</label>
-                        <select name="patient_id" class="form-control" required>
-                            <option value="">— Select patient —</option>
-                            <?php foreach ($patients as $p): ?>
-                            <option value="<?= $p['patient_ID'] ?>"><?= htmlspecialchars($p['full_name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Physician *</label>
-                        <select name="physician_id" class="form-control" required>
-                            <option value="">— Select physician —</option>
-                            <?php foreach ($physicians as $ph): ?>
-                            <option value="<?= $ph['physician_ID'] ?>"><?= htmlspecialchars($ph['full_name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Visit Date *</label>
-                        <input type="date" name="visit_date" class="form-control" required value="<?= date('Y-m-d') ?>">
-                    </div>
-                    <div class="form-full form-group">
-                        <label class="form-label">Symptoms / Chief Complaint *</label>
-                        <textarea name="symptoms" class="form-control" required placeholder="Describe symptoms…"></textarea>
-                    </div>
-                    <div class="form-full form-group">
-                        <label class="form-label">Prescription / Treatment *</label>
-                        <textarea name="prescription" class="form-control" required placeholder="Medications, instructions…"></textarea>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline" onclick="closeModal('modalAdd')">Cancel</button>
-                <button type="submit" class="btn btn-primary">Save Visit</button>
-            </div>
-        </form>
-    </div>
-</div>
-
 
 <!-- EDIT MODAL -->
 <div class="modal-overlay" id="modalEdit">
@@ -769,9 +700,6 @@ document.querySelectorAll('.modal-overlay').forEach(o => {
     o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); });
 });
 
-// ADD
-function openAdd() { openModal('modalAdd'); }
-
 // EDIT — fetches fresh data from DB
 function openEdit(visitId) {
     const body    = document.getElementById('editModalBody');
@@ -797,7 +725,7 @@ function openEdit(visitId) {
             const physicians = <?= json_encode($physicians) ?>;
 
             let patientOptions   = patients.map(p =>
-                `<option value="${p.patient_ID}" ${p.patient_ID == data.patient_ID ? 'selected' : ''}>${escHtml(p.full_name)}</option>`
+                `<option value="${p.patient_ID}" ${p.patient_ID == data.patient_ID ? 'selected' : ''}>${p.patient_ID} - ${escHtml(p.full_name)}</option>`
             ).join('');
             let physicianOptions = physicians.map(ph =>
                 `<option value="${ph.physician_ID}" ${ph.physician_ID == data.physician_ID ? 'selected' : ''}>${escHtml(ph.full_name)}</option>`
