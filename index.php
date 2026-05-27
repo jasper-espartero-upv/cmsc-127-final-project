@@ -181,7 +181,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--ink); min-h
     </a>
 
     <!-- NEW VISIT — placeholder -->
-    <a href="BLANK.php" class="module-card">
+    <a href="new_visit.php" class="module-card">
         <div class="module-icon">👨‍⚕️</div>
         <div class="module-title">New Visit</div>
         <div class="module-desc">Input a new Patient Visit for an existing or new patient.</div>
