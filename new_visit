@@ -1,0 +1,820 @@
+<?php
+require_once 'DBConnector.php';
+
+$conn = new mysqli($servername, $username, $password, $dbname);
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+session_start();
+
+if (!isset($_SESSION['staff_ID'])) {
+    header('Location: login.php');
+    exit;
+}
+
+$logged_in_staff = $_SESSION['staff_ID'];
+
+function sanitize($conn, $val) {
+    return $conn->real_escape_string(trim($val));
+}
+
+// FETCH DATA
+$message = '';
+$msgType = 'success';
+
+$patients_result = $conn->query("
+    SELECT patient_ID,
+           CONCAT(first_name,' ',last_name) AS full_name
+    FROM patient
+    ORDER BY last_name ASC
+");
+
+$physicians_result = $conn->query("
+    SELECT physician_ID,
+           CONCAT(first_name,' ',last_name) AS full_name
+    FROM physician
+    ORDER BY last_name ASC
+");
+
+$patients   = $patients_result ? $patients_result->fetch_all(MYSQLI_ASSOC) : [];
+$physicians = $physicians_result ? $physicians_result->fetch_all(MYSQLI_ASSOC) : [];
+
+// CREATE VISIT 
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    $today = date('Y-m-d');
+
+    $patient_mode = $_POST['patient_mode'] ?? 'existing';
+
+    if ($patient_mode === 'new') {
+
+        // CREATE NEW PATIENT FIRST
+        $first_name      = sanitize($conn, $_POST['first_name'] ?? '');
+        $last_name       = sanitize($conn, $_POST['last_name'] ?? '');
+        $birthdate       = sanitize($conn, $_POST['birthdate'] ?? '');
+        $sex             = sanitize($conn, $_POST['sex'] ?? '');
+        $contact_number  = sanitize($conn, $_POST['contact_number'] ?? '');
+        $emerg_name      = sanitize($conn, $_POST['emergency_contact_name'] ?? '');
+        $emerg_number    = sanitize($conn, $_POST['emergency_contact_number'] ?? '');
+        $affiliation     = sanitize($conn, $_POST['affiliation'] ?? '');
+
+        $insert_patient = "
+            INSERT INTO patient
+            (
+                first_name,
+                last_name,
+                birthdate,
+                sex,
+                contact_number,
+                emergency_contact_name,
+                emergency_contact_number,
+                affiliation,
+                created_at,
+                updated_at,
+                created_by
+            )
+            VALUES
+            (
+                '$first_name',
+                '$last_name',
+                '$birthdate',
+                '$sex',
+                '$contact_number',
+                '$emerg_name',
+                '$emerg_number',
+                '$affiliation',
+                '$today',
+                '$today',
+                '$logged_in_staff'
+            )
+        ";
+
+        if (!$conn->query($insert_patient)) {
+            $message = "Error adding patient: " . $conn->error;
+            $msgType = 'error';
+        }
+
+        $patient_id = $conn->insert_id;
+
+    } else {
+        $patient_id = (int)($_POST['patient_id'] ?? 0);
+    }
+
+    if ($msgType !== 'error') {
+
+        $physician_id = (int)$_POST['physician_id'];
+        $visit_date   = sanitize($conn, $_POST['visit_date']);
+        $symptoms     = sanitize($conn, $_POST['symptoms']);
+        $prescription = sanitize($conn, $_POST['prescription']);
+
+        $sql = "
+            INSERT INTO patient_visits
+            (
+                symptoms_description,
+                prescription_details,
+                visit_date,
+                created_at,
+                updated_at,
+                patient_ID,
+                physician_ID,
+                created_by
+            )
+            VALUES
+            (
+                '$symptoms',
+                '$prescription',
+                '$visit_date',
+                '$today',
+                '$today',
+                $patient_id,
+                $physician_id,
+                $logged_in_staff
+            )
+        ";
+
+        if ($conn->query($sql)) {
+            $message = "Visit created successfully.";
+        } else {
+            $message = "Error creating visit: " . $conn->error;
+            $msgType = 'error';
+        }
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>New Visit — UPV HSU</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<style>
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin:0;
+    padding:0;
+}
+
+:root {
+    --bg:#f4f1eb;
+    --surface:#ffffff;
+    --border:#c8c0b0;
+    --ink:#1a1714;
+    --ink-muted:#6b6357;
+    --accent-fg:#f4f1eb;
+    --danger:#8b1a1a;
+    --success:#1a4a1a;
+    --radius:6px;
+    --mono:'IBM Plex Mono', monospace;
+    --sans:'IBM Plex Sans', sans-serif;
+}
+
+body {
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--sans);
+    min-height:100vh;
+}
+
+.topbar {
+    background:var(--ink);
+    color:var(--accent-fg);
+    padding:0 32px;
+    height:56px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    border-bottom:2px solid var(--border);
+}
+
+.topbar-brand {
+    font-family:var(--mono);
+    font-size:13px;
+    letter-spacing:.08em;
+    opacity:.7;
+}
+
+.topbar-title {
+    font-family:var(--mono);
+    font-size:15px;
+    font-weight:600;
+    letter-spacing:.05em;
+}
+
+.btn-home {
+    font-family:var(--mono);
+    font-size:12px;
+    font-weight:600;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    background:var(--accent-fg);
+    color:var(--ink);
+    border:none;
+    padding:8px 20px;
+    border-radius:40px;
+    text-decoration:none;
+}
+
+.main {
+    max-width:1000px;
+    margin:0 auto;
+    padding:32px;
+}
+
+.card {
+    background:var(--surface);
+    border:1.5px solid var(--border);
+    border-radius:var(--radius);
+    overflow:hidden;
+}
+
+.card-header {
+    background:var(--ink);
+    color:var(--accent-fg);
+    padding:18px 24px;
+    font-family:var(--mono);
+    font-size:13px;
+    font-weight:600;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+}
+
+.card-body {
+    padding:28px 24px;
+}
+
+.form-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:18px;
+}
+
+.form-full {
+    grid-column:1 / -1;
+}
+
+.form-group {
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+}
+
+.form-label {
+    font-family:var(--mono);
+    font-size:11px;
+    font-weight:600;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--ink-muted);
+}
+
+.form-control {
+    width:100%;
+    border:1.5px solid var(--border);
+    background:var(--bg);
+    border-radius:var(--radius);
+    padding:10px 12px;
+    font-size:14px;
+    outline:none;
+    transition:border-color .15s;
+}
+
+.form-control:focus {
+    border-color:var(--ink);
+}
+
+textarea.form-control {
+    resize:vertical;
+    min-height:90px;
+}
+
+.patient-toggle {
+    display:flex;
+    gap:12px;
+    margin-bottom:24px;
+}
+
+.toggle-btn {
+    flex:1;
+    padding:12px;
+    border:2px solid var(--ink);
+    background:transparent;
+    color:var(--ink);
+    border-radius:var(--radius);
+    cursor:pointer;
+    font-family:var(--mono);
+    font-size:12px;
+    font-weight:600;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+}
+
+.toggle-btn.active {
+    background:var(--ink);
+    color:var(--accent-fg);
+}
+
+.section-title {
+    margin:24px 0 16px;
+    font-family:var(--mono);
+    font-size:12px;
+    font-weight:600;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--ink-muted);
+    border-bottom:1px solid var(--border);
+    padding-bottom:6px;
+}
+
+.actions {
+    display:flex;
+    justify-content:center;
+    gap:12px;
+    margin-top:28px;
+}
+
+.btn {
+    font-family:var(--mono);
+    font-size:12px;
+    font-weight:600;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:10px 22px;
+    border-radius:40px;
+    border:2px solid var(--ink);
+    cursor:pointer;
+    text-decoration:none;
+}
+
+.btn-primary {
+    background:var(--ink);
+    color:var(--accent-fg);
+}
+
+.btn-outline {
+    background:transparent;
+    color:var(--ink);
+}
+
+.toast {
+    padding:12px 18px;
+    border-radius:var(--radius);
+    margin-bottom:20px;
+    font-family:var(--mono);
+    font-size:13px;
+    border-left:4px solid;
+}
+
+.toast-success {
+    background:#e8f5e8;
+    color:var(--success);
+    border-color:var(--success);
+}
+
+.toast-error {
+    background:#fbe8e8;
+    color:var(--danger);
+    border-color:var(--danger);
+}
+
+.hidden {
+    display:none;
+}
+
+.patient-search-wrap {
+    position:relative;
+    margin-bottom:8px;
+}
+
+.patient-search-input {
+    width:100%;
+    border:1.5px solid var(--border);
+    background:var(--bg);
+    border-radius:var(--radius);
+    padding:10px 36px 10px 12px;
+    font-size:14px;
+    font-family:var(--sans);
+    outline:none;
+    transition:border-color .15s;
+}
+
+.patient-search-input:focus {
+    border-color:var(--ink);
+}
+
+.patient-search-icon {
+    position:absolute;
+    right:11px;
+    top:50%;
+    transform:translateY(-50%);
+    pointer-events:none;
+    color:var(--ink-muted);
+    font-size:15px;
+}
+
+.patient-search-clear {
+    position:absolute;
+    right:11px;
+    top:50%;
+    transform:translateY(-50%);
+    background:none;
+    border:none;
+    cursor:pointer;
+    color:var(--ink-muted);
+    font-size:16px;
+    line-height:1;
+    display:none;
+    padding:0;
+}
+
+.patient-count {
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--ink-muted);
+    margin-bottom:6px;
+    letter-spacing:.04em;
+}
+
+@media (max-width: 768px) {
+
+    .form-grid {
+        grid-template-columns:1fr;
+    }
+
+    .main {
+        padding:20px;
+    }
+
+}
+
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <span class="topbar-brand">UPV · HSU</span>
+    <span class="topbar-title">New Visit</span>
+    <div style="display:flex;align-items:center;gap:14px;">
+        <span style="font-family:var(--mono);font-size:11px;opacity:.6;letter-spacing:.06em;">
+            <?= htmlspecialchars($_SESSION['staff_name'] ?? '') ?>
+            &nbsp;·&nbsp;
+            <?= htmlspecialchars(strtoupper($_SESSION['staff_role'] ?? '')) ?>
+        </span>
+        <a href="index.php" class="btn-home">Home</a>
+        <a href="logout.php" class="btn-home" style="background:transparent;color:var(--accent-fg);border:1.5px solid rgba(244,241,235,.3);">Logout</a>
+    </div>
+</div>
+
+<div class="main">
+
+    <?php if ($message): ?>
+        <div class="toast toast-<?= $msgType ?>">
+            <?= htmlspecialchars($message) ?>
+        </div>
+    <?php endif; ?>
+
+    <div class="card">
+
+        <div class="card-header">
+            Create Patient Visit
+        </div>
+
+        <div class="card-body">
+
+            <form method="POST">
+
+                <input type="hidden" name="patient_mode" id="patientMode" value="existing">
+
+                <div class="patient-toggle">
+                    <button type="button" class="toggle-btn active" id="btnExisting">
+                        Existing Patient
+                    </button>
+
+                    <button type="button" class="toggle-btn" id="btnNew">
+                        New Patient
+                    </button>
+                </div>
+
+                <!-- EXISTING PATIENT -->
+                <div id="existingPatientSection">
+
+                    <div class="form-group">
+                        <label class="form-label">Patient *</label>
+
+                        <div class="patient-search-wrap">
+                            <input
+                                type="text"
+                                id="patientSearch"
+                                class="patient-search-input"
+                                placeholder="Search by name or ID..."
+                                autocomplete="off"
+                            >
+                            <span class="patient-search-icon" id="searchIcon">&#9906;</span>
+                            <button type="button" class="patient-search-clear" id="searchClear" title="Clear search">&#x2715;</button>
+                        </div>
+
+                        <div class="patient-count" id="patientCount"></div>
+
+                        <select name="patient_id" id="patientSelect" class="form-control" size="5" style="height:auto;overflow-y:auto;">
+                            <option value="">— Select Patient —</option>
+
+                            <?php foreach ($patients as $p): ?>
+                                <option value="<?= $p['patient_ID'] ?>">
+                                    <?= $p['patient_ID'] ?> - <?= htmlspecialchars($p['full_name']) ?>
+                                </option>
+                            <?php endforeach; ?>
+
+                        </select>
+                    </div>
+
+                </div>
+
+                <!-- NEW PATIENT -->
+                <div id="newPatientSection" class="hidden">
+
+                    <div class="section-title">
+                        Patient Information
+                    </div>
+
+                    <div class="form-grid">
+
+                        <div class="form-group">
+                            <label class="form-label">First Name *</label>
+                            <input type="text" name="first_name" class="form-control">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Last Name *</label>
+                            <input type="text" name="last_name" class="form-control">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Birthdate *</label>
+                            <input type="date" name="birthdate" class="form-control">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Sex *</label>
+                            <select name="sex" class="form-control">
+                                <option value="">— Select —</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Contact Number</label>
+                            <input
+                                type="text"
+                                name="contact_number"
+                                class="form-control"
+                                maxlength="11"
+                                minlength="11"
+                                pattern="09[0-9]{9}"
+                                oninput="this.value = this.value.replace(/[^0-9]/g, '')"
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Affiliation</label>
+                            <input type="text" name="affiliation" class="form-control">
+                        </div>
+
+                        <div class="form-full section-title">
+                            Emergency Contact
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Name</label>
+                            <input type="text" name="emergency_contact_name" class="form-control">
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Number</label>
+                            <input
+                                type="text"
+                                name="emergency_contact_number"
+                                class="form-control"
+                                maxlength="11"
+                                minlength="11"
+                                pattern="09[0-9]{9}"
+                                oninput="this.value = this.value.replace(/[^0-9]/g, '')"
+                            >
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div class="section-title">
+                    Visit Information
+                </div>
+
+                <div class="form-grid">
+
+                    <div class="form-group">
+                        <label class="form-label">Physician *</label>
+
+                        <select name="physician_id" class="form-control" required>
+                            <option value="">— Select Physician —</option>
+
+                            <?php foreach ($physicians as $ph): ?>
+                                <option value="<?= $ph['physician_ID'] ?>">
+                                    <?= htmlspecialchars($ph['full_name']) ?>
+                                </option>
+                            <?php endforeach; ?>
+
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Visit Date *</label>
+                        <input
+                            type="date"
+                            name="visit_date"
+                            class="form-control"
+                            required
+                            value="<?= date('Y-m-d') ?>"
+                        >
+                    </div>
+
+                    <div class="form-full form-group">
+                        <label class="form-label">Symptoms / Chief Complaint *</label>
+
+                        <textarea
+                            name="symptoms"
+                            class="form-control"
+                            required
+                            placeholder="Describe symptoms..."
+                        ></textarea>
+                    </div>
+
+                    <div class="form-full form-group">
+                        <label class="form-label">Prescription / Treatment *</label>
+
+                        <textarea
+                            name="prescription"
+                            class="form-control"
+                            required
+                            placeholder="Medications, instructions..."
+                        ></textarea>
+                    </div>
+
+                </div>
+
+                <div class="actions">
+                    <a href="patient_visits.php" class="btn btn-outline">
+                        Cancel
+                    </a>
+
+                    <button type="submit" class="btn btn-primary">
+                        Save Visit
+                    </button>
+                </div>
+
+            </form>
+
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+
+/* ── Patient search bar ── */
+const patientSearch  = document.getElementById('patientSearch');
+const patientSelect  = document.getElementById('patientSelect');
+const searchClear    = document.getElementById('searchClear');
+const searchIcon     = document.getElementById('searchIcon');
+const patientCount   = document.getElementById('patientCount');
+
+// Cache all options (skip the placeholder at index 0)
+const allOptions = Array.from(patientSelect.options).slice(1).map(opt => ({
+    value : opt.value,
+    text  : opt.text,
+    lower : opt.text.toLowerCase() + ' ' + opt.value  // include ID for searching
+}));
+
+function updateCount(visible, total) {
+    patientCount.textContent = visible === total
+        ? `${total} patient${total !== 1 ? 's' : ''}`
+        : `${visible} of ${total} patient${total !== 1 ? 's' : ''} shown`;
+}
+
+function filterPatients() {
+    const q = patientSearch.value.trim().toLowerCase();
+
+    // Rebuild option list to preserve DOM order
+    patientSelect.innerHTML = '<option value="">— Select Patient —</option>';
+
+    let visibleCount = 0;
+    allOptions.forEach(({ value, text, lower }) => {
+        if (!q || lower.includes(q)) {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = text;
+            patientSelect.appendChild(opt);
+            visibleCount++;
+        }
+    });
+
+    updateCount(visibleCount, allOptions.length);
+
+    // Show/hide clear button
+    searchClear.style.display = q ? 'block' : 'none';
+    searchIcon.style.display  = q ? 'none'  : 'block';
+}
+
+// Initial count
+updateCount(allOptions.length, allOptions.length);
+
+patientSearch.addEventListener('input', () => {
+    openList();
+    filterPatients();
+});
+
+searchClear.addEventListener('click', () => {
+    clearSelection();
+    patientSearch.focus();
+});
+
+// Focus search when switching to Existing Patient tab
+btnExisting.addEventListener('click', () => {
+    setTimeout(() => patientSearch.focus(), 50);
+});
+
+/* -- Collapse / expand list -- */
+function openList() {
+    patientSelect.size = 5;
+    patientSelect.style.display = '';
+    patientCount.style.display  = '';
+}
+
+function closeList(selectedText) {
+    patientSelect.size = 1;
+    patientSelect.style.display = 'none';
+    patientCount.style.display  = 'none';
+    patientSearch.value    = selectedText;
+    patientSearch.readOnly = true;
+    searchClear.style.display = 'block';
+    searchIcon.style.display  = 'none';
+}
+
+function clearSelection() {
+    patientSelect.value        = '';
+    patientSearch.value        = '';
+    patientSearch.readOnly     = false;
+    filterPatients();
+    openList();
+}
+
+patientSelect.addEventListener('change', () => {
+    const selected = patientSelect.options[patientSelect.selectedIndex];
+    if (selected && selected.value) {
+        closeList(selected.text.trim());
+    }
+});
+
+
+const btnNew      = document.getElementById('btnNew');
+
+const existingSection = document.getElementById('existingPatientSection');
+const newSection      = document.getElementById('newPatientSection');
+
+const patientMode = document.getElementById('patientMode');
+
+btnExisting.addEventListener('click', () => {
+
+    patientMode.value = 'existing';
+
+    btnExisting.classList.add('active');
+    btnNew.classList.remove('active');
+
+    existingSection.classList.remove('hidden');
+    newSection.classList.add('hidden');
+
+});
+
+btnNew.addEventListener('click', () => {
+
+    patientMode.value = 'new';
+
+    btnNew.classList.add('active');
+    btnExisting.classList.remove('active');
+
+    existingSection.classList.add('hidden');
+    newSection.classList.remove('hidden');
+
+});
+
+</script>
+
+</body>
+</html>
