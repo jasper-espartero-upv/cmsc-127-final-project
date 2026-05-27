@@ -457,7 +457,7 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
                 <input
                     type="text" name="search" id="searchInput"
                     class="search-input"
-                    placeholder="Name, ID, specialization..."
+                    placeholder="Name, ID, Specialization..."
                     value="<?= htmlspecialchars($search) ?>"
                     autocomplete="off"
                 >
