@@ -1,14 +1,13 @@
 <?php
 require_once 'DBConnector.php';
 
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
+// SESSION 
 session_start();
-// if (!isset($_SESSION['staff_ID'])) { header('Location: login.php'); exit; }
-$logged_in_staff = $_SESSION['staff_ID'] ?? 2;
+if (!isset($_SESSION['staff_ID'])) {
+    header('Location: login.php');
+    exit;
+}
+$logged_in_staff = $_SESSION['staff_ID'];
 
 function sanitize($conn, $val) {
     return $conn->real_escape_string(trim($val));
@@ -27,33 +26,11 @@ if (isset($_GET['get_visit'])) {
     exit;
 }
 
-// ACTIONS
 $action  = $_POST['action'] ?? $_GET['action'] ?? '';
 $message = '';
 $msgType = 'success';
 
-// ADD
-if ($action === 'add' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $patient_id   = (int)$_POST['patient_id'];
-    $physician_id = (int)$_POST['physician_id'];
-    $visit_date   = sanitize($conn, $_POST['visit_date']);
-    $symptoms     = sanitize($conn, $_POST['symptoms']);
-    $prescription = sanitize($conn, $_POST['prescription']);
-    $today        = date('Y-m-d');
-
-    $sql = "INSERT INTO patient_visits
-              (symptoms_description, prescription_details, visit_date, created_at, updated_at, patient_ID, physician_ID, created_by)
-            VALUES
-              ('$symptoms','$prescription','$visit_date','$today','$today',$patient_id,$physician_id,$logged_in_staff)";
-    if ($conn->query($sql)) {
-        $message = "Visit record added successfully.";
-    } else {
-        $message = "Error adding record: " . $conn->error;
-        $msgType = 'error';
-    }
-}
-
-// EDIT
+// EDIT — re-fetches the existing record from DB first to ensure we're working with real data
 if ($action === 'edit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $visit_id     = (int)$_POST['visit_id'];
     $patient_id   = (int)$_POST['patient_id'];
@@ -86,7 +63,7 @@ if ($action === 'edit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// DELETE
+// DELETE — queries the DB to confirm the record exists before deleting
 if ($action === 'delete' && isset($_GET['id'])) {
     $visit_id = (int)$_GET['id'];
     $check    = $conn->query("SELECT visit_ID FROM patient_visits WHERE visit_ID = $visit_id LIMIT 1");
@@ -103,23 +80,56 @@ if ($action === 'delete' && isset($_GET['id'])) {
     }
 }
 
-// FETCH VISITS 
-$search = sanitize($conn, $_GET['search'] ?? '');
-$where  = '';
+// FETCH VISITS with sort
+
+$search       = sanitize($conn, $_GET['search']      ?? '');
+$filter_sort  = sanitize($conn, $_GET['sort']        ?? 'newest');
+$filter_date  = sanitize($conn, $_GET['date_range']  ?? '');
+$filter_phys  = (int)($_GET['physician_id']          ?? 0);
+
+$conditions = [];
+
+// Search term
 if ($search !== '') {
-    $where = "WHERE
-        pv.visit_ID LIKE '%$search%'
-        OR p.first_name  LIKE '%$search%'
+    $is_numeric_search = ctype_digit($search);
+    $id_condition      = $is_numeric_search ? "pv.visit_ID = " . (int)$search . " OR" : '';
+    $text_conditions = $is_numeric_search ? '' : "
+        OR pv.symptoms_description LIKE '%$search%'
+        OR pv.prescription_details LIKE '%$search%'";
+    $conditions[] = "(
+        $id_condition
+        p.first_name  LIKE '%$search%'
         OR p.last_name   LIKE '%$search%'
         OR CONCAT(p.first_name,' ',p.last_name) LIKE '%$search%'
         OR ph.first_name LIKE '%$search%'
         OR ph.last_name  LIKE '%$search%'
         OR CONCAT(ph.first_name,' ',ph.last_name) LIKE '%$search%'
-        OR pv.visit_date LIKE '%$search%'
-        OR pv.symptoms_description LIKE '%$search%'
-        OR pv.prescription_details LIKE '%$search%'
-        OR p.affiliation LIKE '%$search%'";
+        OR p.affiliation LIKE '%$search%'
+        $text_conditions
+    )";
 }
+
+// Date added range 
+if ($filter_date === 'last_week') {
+    $conditions[] = "pv.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+} elseif ($filter_date === 'last_month') {
+    $conditions[] = "pv.created_at >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)";
+}
+
+// Filter by physician
+if ($filter_phys > 0) {
+    $conditions[] = "pv.physician_ID = $filter_phys";
+}
+
+$where = count($conditions) ? 'WHERE ' . implode(' AND ', $conditions) : '';
+
+// ORDER BY 
+$order = match($filter_sort) {
+    'oldest'    => 'pv.visit_date ASC,  pv.visit_ID ASC',
+    'name_az'   => 'p.last_name ASC,  p.first_name ASC',
+    'name_za'   => 'p.last_name DESC, p.first_name DESC',
+    default     => 'pv.visit_date DESC, pv.visit_ID DESC',   // newest
+};
 
 $visits_sql = "
     SELECT
@@ -137,11 +147,17 @@ $visits_sql = "
     JOIN patient   p  ON pv.patient_ID   = p.patient_ID
     JOIN physician ph ON pv.physician_ID = ph.physician_ID
     $where
-    ORDER BY pv.visit_date DESC, pv.visit_ID DESC
+    ORDER BY $order
 ";
 $visits_result = $conn->query($visits_sql);
 
-// ─── FETCH PATIENTS & PHYSICIANS for dropdowns
+// Active filter count 
+$active_filters = 0;
+if ($filter_sort  !== 'newest') $active_filters++;
+if ($filter_date  !== '')       $active_filters++;
+if ($filter_phys  > 0)         $active_filters++;
+
+// FETCH PATIENTS & PHYSICIANS for dropdowns (from DB)
 $patients_result   = $conn->query("SELECT patient_ID,   CONCAT(first_name,' ',last_name) AS full_name FROM patient   ORDER BY last_name");
 $physicians_result = $conn->query("SELECT physician_ID, CONCAT(first_name,' ',last_name) AS full_name FROM physician ORDER BY last_name");
 
@@ -340,7 +356,76 @@ textarea.form-control { resize:vertical; min-height:80px; }
 .confirm-body strong { font-size:16px; display:block; margin-bottom:8px; }
 .confirm-body p { font-size:14px; color: var(--ink-muted); }
 
-/* ── LOADING SPINNER ── */
+/* ── FILTER PANEL ── */
+.filter-panel {
+    display: none;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    animation: slideIn .15s ease;
+}
+.filter-panel.open { display: block; }
+.filter-panel-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin-bottom: 16px;
+}
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    align-items: end;
+}
+.filter-group { display: flex; flex-direction: column; gap: 6px; }
+.filter-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+}
+.filter-select {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    outline: none;
+    transition: border-color .15s;
+    cursor: pointer;
+}
+.filter-select:focus { border-color: var(--ink); }
+.filter-actions { display: flex; gap: 8px; align-items: flex-end; padding-top: 2px; }
+.filter-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    background: var(--danger);
+    color: #fff;
+    border-radius: 50%;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+.btn-filter {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
 .spinner {
     display:none; width:18px; height:18px;
     border:2px solid var(--border); border-top-color: var(--ink);
@@ -354,7 +439,15 @@ textarea.form-control { resize:vertical; min-height:80px; }
 <div class="topbar">
     <span class="topbar-brand">UPV · HSU</span>
     <span class="topbar-title">Patient Visits</span>
-    <a href="index.php" class="btn-home">Home</a>
+    <div style="display:flex;align-items:center;gap:14px;">
+        <span style="font-family:var(--mono);font-size:11px;opacity:.6;letter-spacing:.06em;">
+            <?= htmlspecialchars($_SESSION['staff_name'] ?? '') ?>
+            &nbsp;·&nbsp;
+            <?= htmlspecialchars(strtoupper($_SESSION['staff_role'] ?? '')) ?>
+        </span>
+        <a href="index.php" class="btn-home">Home</a>
+        <a href="logout.php" class="btn-home" style="background:transparent;color:var(--accent-fg);border:1.5px solid rgba(244,241,235,.3);">Logout</a>
+    </div>
 </div>
 
 <div class="main">
@@ -363,7 +456,8 @@ textarea.form-control { resize:vertical; min-height:80px; }
     <div class="toast toast-<?= $msgType ?>"><?= htmlspecialchars($message) ?></div>
     <?php endif; ?>
 
-    <form method="GET" action="">
+    <!-- TOOLBAR -->
+    <form method="GET" action="patient_visits.php" id="filterForm">
         <div class="toolbar">
             <div class="search-wrap">
                 <span class="search-label">Search</span>
@@ -376,14 +470,73 @@ textarea.form-control { resize:vertical; min-height:80px; }
                 >
                 <button type="submit" class="btn-search" title="Search">&#9906;</button>
             </div>
-            <?php if ($search): ?>
-            <a href="patient_visits.php" class="btn btn-outline" style="padding:8px 14px;font-size:11px;">✕ Clear</a>
+
+            <!-- Filter toggle button -->
+            <button type="button" class="btn btn-outline btn-filter" onclick="toggleFilters()" id="btnFilter">
+                ⊟ Filters
+                <?php if ($active_filters > 0): ?>
+                <span class="filter-badge"><?= $active_filters ?></span>
+                <?php endif; ?>
+            </button>
+
+            <?php if ($search || $active_filters > 0): ?>
+            <a href="patient_visits.php" class="btn btn-outline" style="padding:8px 14px;font-size:11px;">✕ Clear All</a>
             <?php endif; ?>
+
             <div class="spacer"></div>
-            <button type="button" class="btn btn-primary" onclick="openAdd()">+ Add Visit</button>
+            <a href="new_visit.php" class="btn btn-primary">+ Add Visit</a>
+        </div>
+
+        <!-- FILTER PANEL -->
+        <div class="filter-panel <?= $active_filters > 0 ? 'open' : '' ?>" id="filterPanel">
+            <div class="filter-panel-title">Filter &amp; Sort</div>
+            <div class="filter-grid">
+
+                <!-- Sort order -->
+                <div class="filter-group">
+                    <label class="filter-label">Sort By</label>
+                    <select name="sort" class="filter-select" onchange="this.form.submit()">
+                        <option value="newest"  <?= $filter_sort === 'newest'  ? 'selected' : '' ?>>Visit Date: Newest First</option>
+                        <option value="oldest"  <?= $filter_sort === 'oldest'  ? 'selected' : '' ?>>Visit Date: Oldest First</option>
+                        <option value="name_az" <?= $filter_sort === 'name_az' ? 'selected' : '' ?>>Patient Name: A → Z</option>
+                        <option value="name_za" <?= $filter_sort === 'name_za' ? 'selected' : '' ?>>Patient Name: Z → A</option>
+                    </select>
+                </div>
+
+                <!-- Date added range -->
+                <div class="filter-group">
+                    <label class="filter-label">Date Added</label>
+                    <select name="date_range" class="filter-select" onchange="this.form.submit()">
+                        <option value=""           <?= $filter_date === ''           ? 'selected' : '' ?>>All Time</option>
+                        <option value="last_week"  <?= $filter_date === 'last_week'  ? 'selected' : '' ?>>Last 7 Days</option>
+                        <option value="last_month" <?= $filter_date === 'last_month' ? 'selected' : '' ?>>Last 30 Days</option>
+                    </select>
+                </div>
+
+                <!-- Filter by physician -->
+                <div class="filter-group">
+                    <label class="filter-label">Physician</label>
+                    <select name="physician_id" class="filter-select" onchange="this.form.submit()">
+                        <option value="0">All Physicians</option>
+                        <?php foreach ($physicians as $ph): ?>
+                        <option value="<?= $ph['physician_ID'] ?>" <?= $filter_phys === (int)$ph['physician_ID'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($ph['full_name']) ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <!-- Apply / Reset -->
+                <div class="filter-actions">
+                    <button type="submit" class="btn btn-primary" style="padding:8px 16px;font-size:11px;">Apply</button>
+                    <a href="patient_visits.php<?= $search ? '?search='.urlencode($search) : '' ?>" class="btn btn-outline" style="padding:8px 16px;font-size:11px;">Reset Filters</a>
+                </div>
+
+            </div>
         </div>
     </form>
 
+    <!-- TABLE -->
     <div class="table-card">
         <div class="table-wrap">
             <table>
@@ -444,7 +597,36 @@ textarea.form-control { resize:vertical; min-height:80px; }
         <div class="table-footer">
             <span>
                 <?php if ($search): ?>
-                    Results for: <strong><?= htmlspecialchars($search) ?></strong> &nbsp;·&nbsp;
+                    Search: <strong><?= htmlspecialchars($search) ?></strong>
+                    <?php if ($active_filters > 0): ?> &nbsp;·&nbsp; <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($filter_sort !== 'newest'): ?>
+                    Sort: <strong><?= match($filter_sort) {
+                        'oldest'  => 'Oldest First',
+                        'name_az' => 'Name A→Z',
+                        'name_za' => 'Name Z→A',
+                        default   => ''
+                    } ?></strong>
+                    <?php if ($filter_date || $filter_phys): ?> &nbsp;·&nbsp; <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($filter_date): ?>
+                    Date: <strong><?= $filter_date === 'last_week' ? 'Last 7 Days' : 'Last 30 Days' ?></strong>
+                    <?php if ($filter_phys): ?> &nbsp;·&nbsp; <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($filter_phys): ?>
+                    <?php
+                        $phys_name = '';
+                        foreach ($physicians as $ph) {
+                            if ((int)$ph['physician_ID'] === $filter_phys) {
+                                $phys_name = $ph['full_name'];
+                                break;
+                            }
+                        }
+                    ?>
+                    Physician: <strong><?= htmlspecialchars($phys_name) ?></strong>
+                <?php endif; ?>
+                <?php if (!$search && !$active_filters): ?>
+                    All records &nbsp;·&nbsp;
                 <?php endif; ?>
                 <?= $count ?> record<?= $count !== 1 ? 's' : '' ?>
             </span>
@@ -454,57 +636,8 @@ textarea.form-control { resize:vertical; min-height:80px; }
 </div>
 
 
-<div class="modal-overlay" id="modalAdd">
-    <div class="modal">
-        <div class="modal-header">
-            <span class="modal-title">Add Visit Record</span>
-            <button class="modal-close" onclick="closeModal('modalAdd')">✕</button>
-        </div>
-        <form method="POST" action="patient_visits.php<?= $search ? '?search='.urlencode($search) : '' ?>">
-            <input type="hidden" name="action" value="add">
-            <div class="modal-body">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label class="form-label">Patient *</label>
-                        <select name="patient_id" class="form-control" required>
-                            <option value="">— Select patient —</option>
-                            <?php foreach ($patients as $p): ?>
-                            <option value="<?= $p['patient_ID'] ?>"><?= htmlspecialchars($p['full_name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Physician *</label>
-                        <select name="physician_id" class="form-control" required>
-                            <option value="">— Select physician —</option>
-                            <?php foreach ($physicians as $ph): ?>
-                            <option value="<?= $ph['physician_ID'] ?>"><?= htmlspecialchars($ph['full_name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Visit Date *</label>
-                        <input type="date" name="visit_date" class="form-control" required value="<?= date('Y-m-d') ?>">
-                    </div>
-                    <div class="form-full form-group">
-                        <label class="form-label">Symptoms / Chief Complaint *</label>
-                        <textarea name="symptoms" class="form-control" required placeholder="Describe symptoms…"></textarea>
-                    </div>
-                    <div class="form-full form-group">
-                        <label class="form-label">Prescription / Treatment *</label>
-                        <textarea name="prescription" class="form-control" required placeholder="Medications, instructions…"></textarea>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline" onclick="closeModal('modalAdd')">Cancel</button>
-                <button type="submit" class="btn btn-primary">Save Visit</button>
-            </div>
-        </form>
-    </div>
-</div>
 
-
+<!-- EDIT MODAL -->
 <div class="modal-overlay" id="modalEdit">
     <div class="modal">
         <div class="modal-header">
@@ -527,6 +660,7 @@ textarea.form-control { resize:vertical; min-height:80px; }
 </div>
 
 
+<!-- DELETE CONFIRM -->
 <div class="modal-overlay" id="modalConfirm">
     <div class="modal confirm-modal">
         <div class="modal-header">
@@ -547,7 +681,13 @@ textarea.form-control { resize:vertical; min-height:80px; }
 
 
 <script>
-// MODALS
+// FILTER PANEL TOGGLE 
+function toggleFilters() {
+    const panel = document.getElementById('filterPanel');
+    panel.classList.toggle('open');
+}
+
+
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
@@ -555,10 +695,7 @@ document.querySelectorAll('.modal-overlay').forEach(o => {
     o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); });
 });
 
-// ADD 
-function openAdd() { openModal('modalAdd'); }
-
-// EDIT 
+// EDIT — fetches fresh data from DB
 function openEdit(visitId) {
     const body    = document.getElementById('editModalBody');
     const spinner = document.getElementById('editSpinner');
@@ -583,7 +720,7 @@ function openEdit(visitId) {
             const physicians = <?= json_encode($physicians) ?>;
 
             let patientOptions   = patients.map(p =>
-                `<option value="${p.patient_ID}" ${p.patient_ID == data.patient_ID ? 'selected' : ''}>${escHtml(p.full_name)}</option>`
+                `<option value="${p.patient_ID}" ${p.patient_ID == data.patient_ID ? 'selected' : ''}>${p.patient_ID} - ${escHtml(p.full_name)}</option>`
             ).join('');
             let physicianOptions = physicians.map(ph =>
                 `<option value="${ph.physician_ID}" ${ph.physician_ID == data.physician_ID ? 'selected' : ''}>${escHtml(ph.full_name)}</option>`
@@ -620,7 +757,7 @@ function openEdit(visitId) {
         });
 }
 
-// DELETE CONFIRM
+// DELETE CONFIRM 
 function openConfirm(visitId) {
     const search = <?= json_encode($search) ?>;
     const qs     = search ? '&search=' + encodeURIComponent(search) : '';
@@ -636,11 +773,11 @@ function escHtml(str) {
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// TOAST AUTO-DISMISS 
+// TOAST AUTO-DISMISS
 const toast = document.querySelector('.toast');
 if (toast) setTimeout(() => toast.style.display = 'none', 4000);
 
-// SEARCH ON ENTER
+// SEARCH ON ENTER 
 document.getElementById('searchInput')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') e.target.closest('form').submit();
 });

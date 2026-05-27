@@ -1,11 +1,6 @@
 <?php
 require_once 'DBConnector.php';
 
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
 session_start();
 $logged_in_staff = $_SESSION['staff_ID'] ?? 2; // Falls back to 2 (Jose Reyes) if no session exists
 
@@ -119,8 +114,10 @@ if ($action === 'delete' && isset($_GET['id'])) {
 }
 
 // DATA QUERY: FETCH PHYSICIANS LIST
-$search = sanitize($conn, $_GET['search'] ?? '');
-$having  = '';
+$search      = sanitize($conn, $_GET['search'] ?? '');
+$filter_sort = sanitize($conn, $_GET['sort']   ?? 'name_az');
+
+$having = '';
 if ($search !== '') {
     $having = "HAVING
         p.physician_ID LIKE '%$search%'
@@ -130,19 +127,28 @@ if ($search !== '') {
         OR specializations LIKE '%$search%'";
 }
 
+$order = match($filter_sort) {
+    'name_za' => 'p.last_name DESC, p.first_name DESC',
+    default   => 'p.last_name ASC,  p.first_name ASC',   // name_az
+};
+
 $physicians_sql = "
-    SELECT 
-        p.physician_ID, 
-        p.first_name, 
-        p.last_name, 
-        GROUP_CONCAT(ps.specialization SEPARATOR ', ') AS specializations 
-    FROM physician p 
-    LEFT JOIN physician_specialization ps ON p.physician_ID = ps.physician_ID 
+    SELECT
+        p.physician_ID,
+        p.first_name,
+        p.last_name,
+        GROUP_CONCAT(ps.specialization SEPARATOR ', ') AS specializations
+    FROM physician p
+    LEFT JOIN physician_specialization ps ON p.physician_ID = ps.physician_ID
     GROUP BY p.physician_ID
     $having
-    ORDER BY p.last_name ASC, p.first_name ASC
+    ORDER BY $order
 ";
 $physicians_result = $conn->query($physicians_sql);
+
+// Active filter count
+$active_filters = 0;
+if ($filter_sort !== 'name_az') $active_filters++;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -366,6 +372,50 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
     border-radius:50%; animation:spin .6s linear infinite; margin:0 auto;
 }
 @keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── FILTER PANEL ── */
+.filter-panel {
+    display: none;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    animation: slideIn .15s ease;
+}
+.filter-panel.open { display: block; }
+.filter-panel-title {
+    font-family: var(--mono);
+    font-size: 11px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-muted); margin-bottom: 16px;
+}
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px; align-items: end;
+}
+.filter-group { display: flex; flex-direction: column; gap: 6px; }
+.filter-label {
+    font-family: var(--mono); font-size: 10px; font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted);
+}
+.filter-select {
+    font-family: var(--sans); font-size: 13px; color: var(--ink);
+    background: var(--bg); border: 1.5px solid var(--border);
+    border-radius: var(--radius); padding: 8px 10px;
+    outline: none; transition: border-color .15s; cursor: pointer;
+}
+.filter-select:focus { border-color: var(--ink); }
+.filter-actions { display: flex; gap: 8px; align-items: flex-end; padding-top: 2px; }
+.filter-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px;
+    background: var(--danger); color: #fff; border-radius: 50%;
+    font-family: var(--mono); font-size: 9px; font-weight: 700;
+    margin-left: 4px; vertical-align: middle;
+}
+.btn-filter { position: relative; display: inline-flex; align-items: center; gap: 4px; }
 </style>
 </head>
 <body>
@@ -375,12 +425,22 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
         <span class="topbar-brand">UPV · HSU</span>
         <div class="top-nav-tabs">
             <a href="patients.php" class="tab inactive">Patients</a>
-            <a href="patient_visits.php" class="tab inactive">Patient Visits</a>
             <a href="physicians.php" class="tab active">Physicians</a>
-            <a href="staff.php" class="tab inactive">Staff</a>
+            
+            <?php if (isset($_SESSION['staff_role']) && strtolower($_SESSION['staff_role']) === 'admin'): ?>
+                <a href="staff.php" class="tab inactive">Staff</a>
+            <?php endif; ?>
         </div>
     </div>
-    <a href="#" class="btn-home">Home</a>
+    <div style="display:flex;align-items:center;gap:14px;">
+        <span style="font-family:var(--mono);font-size:11px;opacity:.6;letter-spacing:.06em;">
+            <?= htmlspecialchars($_SESSION['staff_name'] ?? '') ?>
+            &nbsp;·&nbsp;
+            <?= htmlspecialchars(strtoupper($_SESSION['staff_role'] ?? '')) ?>
+        </span>
+        <a href="index.php" class="btn-home">Home</a>
+        <a href="logout.php" class="btn-home" style="background:transparent;color:var(--accent-fg);border:1.5px solid rgba(244,241,235,.3);">Logout</a>
+    </div>
 </div>
 
 <div class="main">
@@ -388,24 +448,56 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
     <div class="toast toast-<?= $msgType ?>"><?= htmlspecialchars($message) ?></div>
     <?php endif; ?>
 
-    <form method="GET" action="">
+    <form method="GET" action="physicians.php" id="filterForm">
         <div class="toolbar">
             <div class="search-wrap">
                 <span class="search-label">Search</span>
                 <input
                     type="text" name="search" id="searchInput"
                     class="search-input"
-                    placeholder="Name, ID, specialization..."
+                    placeholder="Name, ID, Specialization..."
                     value="<?= htmlspecialchars($search) ?>"
                     autocomplete="off"
                 >
                 <button type="submit" class="btn-search" title="Search">&#9906;</button>
             </div>
-            <?php if ($search): ?>
-            <a href="physicians.php" class="btn btn-outline" style="padding:8px 14px;font-size:11px;">✕ Clear</a>
+
+            <button type="button" class="btn btn-outline btn-filter" onclick="toggleFilters()" id="btnFilter">
+                ⊟ Filters
+                <?php if ($active_filters > 0): ?>
+                <span class="filter-badge"><?= $active_filters ?></span>
+                <?php endif; ?>
+            </button>
+
+            <?php if ($search || $active_filters > 0): ?>
+            <a href="physicians.php" class="btn btn-outline" style="padding:8px 14px;font-size:11px;">✕ Clear All</a>
             <?php endif; ?>
+
             <div class="spacer"></div>
             <button type="button" class="btn btn-primary" onclick="openAdd()">+ Add Physician</button>
+        </div>
+
+        <!-- FILTER PANEL -->
+        <div class="filter-panel <?= $active_filters > 0 ? 'open' : '' ?>" id="filterPanel">
+            <div class="filter-panel-title">Filter &amp; Sort</div>
+            <div class="filter-grid">
+
+                <!-- Sort order -->
+                <div class="filter-group">
+                    <label class="filter-label">Sort By</label>
+                    <select name="sort" class="filter-select" onchange="this.form.submit()">
+                        <option value="name_az" <?= $filter_sort === 'name_az' ? 'selected' : '' ?>>Name: A → Z</option>
+                        <option value="name_za" <?= $filter_sort === 'name_za' ? 'selected' : '' ?>>Name: Z → A</option>
+                    </select>
+                </div>
+
+                <!-- Apply / Reset -->
+                <div class="filter-actions">
+                    <button type="submit" class="btn btn-primary" style="padding:8px 16px;font-size:11px;">Apply</button>
+                    <a href="physicians.php<?= $search ? '?search='.urlencode($search) : '' ?>" class="btn btn-outline" style="padding:8px 16px;font-size:11px;">Reset Filters</a>
+                </div>
+
+            </div>
         </div>
     </form>
 
@@ -455,7 +547,14 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
         <div class="table-footer">
             <span>
                 <?php if ($search): ?>
-                    Results for: <strong><?= htmlspecialchars($search) ?></strong> &nbsp;·&nbsp;
+                    Results for: <strong><?= htmlspecialchars($search) ?></strong>
+                    <?php if ($active_filters > 0): ?> &nbsp;·&nbsp; <?php endif; ?>
+                <?php endif; ?>
+                <?php if ($filter_sort !== 'name_az'): ?>
+                    Sort: <strong>Name Z→A</strong> &nbsp;·&nbsp;
+                <?php endif; ?>
+                <?php if (!$search && !$active_filters): ?>
+                    All records &nbsp;·&nbsp;
                 <?php endif; ?>
                 <?= $count ?> record<?= $count !== 1 ? 's' : '' ?>
             </span>
@@ -535,6 +634,11 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
 </div>
 
 <script>
+// FILTER PANEL TOGGLE
+function toggleFilters() {
+    document.getElementById('filterPanel').classList.toggle('open');
+}
+
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
