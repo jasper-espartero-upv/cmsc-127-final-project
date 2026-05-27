@@ -117,9 +117,11 @@ $filter_staff = (int)($_GET['staff_id']             ?? 0);
 $conditions = [];
 
 if ($search !== '') {
+    $is_numeric_search = ctype_digit($search);
+    $id_condition      = $is_numeric_search ? "p.patient_ID = " . (int)$search . " OR" : '';
     $conditions[] = "(
-        p.patient_ID LIKE '%$search%'
-        OR p.first_name LIKE '%$search%'
+        $id_condition
+        p.first_name LIKE '%$search%'
         OR p.last_name  LIKE '%$search%'
         OR CONCAT(p.first_name,' ',p.last_name) LIKE '%$search%'
         OR p.contact_number LIKE '%$search%'
@@ -493,7 +495,7 @@ textarea.form-control { resize:vertical; min-height:80px; }
                 <input
                     type="text" name="search" id="searchInput"
                     class="search-input"
-                    placeholder="Name, ID, affiliation..."
+                    placeholder="Name, ID, Affiliation..."
                     value="<?= htmlspecialchars($search) ?>"
                     autocomplete="off"
                 >
