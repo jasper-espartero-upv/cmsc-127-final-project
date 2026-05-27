@@ -139,9 +139,13 @@ $active_filters = 0;
 if ($filter_sort !== 'name_az') $active_filters++;
 if ($filter_role !== '')        $active_filters++;
 
-// Fetch distinct roles for filter dropdown
-$roles_result = $conn->query("SELECT DISTINCT role FROM staff ORDER BY role");
-$roles_list   = $roles_result ? $roles_result->fetch_all(MYSQLI_ASSOC) : [];
+// Fetch distinct roles for dropdowns
+$roles_result = $conn->query("SELECT DISTINCT role FROM staff WHERE role IS NOT NULL AND role != '' ORDER BY role ASC");
+$roles = [];
+while ($r = $roles_result->fetch_assoc()) {
+    $roles[] = $r['role'];
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -439,7 +443,7 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
                 <input
                     type="text" name="search" id="searchInput"
                     class="search-input"
-                    placeholder="Name, ID, role, username..."
+                    placeholder="Name, ID, Username..."
                     value="<?= htmlspecialchars($search) ?>"
                     autocomplete="off"
                 >
@@ -480,9 +484,9 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
                     <label class="filter-label">Role</label>
                     <select name="role" class="filter-select" onchange="this.form.submit()">
                         <option value="">All Roles</option>
-                        <?php foreach ($roles_list as $r): ?>
-                        <option value="<?= htmlspecialchars($r['role']) ?>" <?= $filter_role === $r['role'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars(ucfirst($r['role'])) ?>
+                        <?php foreach ($roles as $r): ?>
+                        <option value="<?= htmlspecialchars($r) ?>" <?= $filter_role === $r ? 'selected' : '' ?>>
+                            <?= htmlspecialchars(ucfirst($r)) ?>
                         </option>
                         <?php endforeach; ?>
                     </select>
@@ -587,7 +591,12 @@ td.mono { font-family: var(--mono); font-size:12.5px; }
                     </div>
                     <div class="form-group">
                         <label class="form-label">Role *</label>
-                        <input type="text" name="role" class="form-control" required placeholder="e.g. admin, nurse">
+                        <select name="role" class="form-control" required>
+                            <option value="" disabled selected>Select a role</option>
+                            <?php foreach ($roles as $r): ?>
+                            <option value="<?= htmlspecialchars($r) ?>"><?= htmlspecialchars(ucfirst($r)) ?></option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Username *</label>
@@ -681,6 +690,10 @@ function openEdit(staffId) {
         })
         .then(data => {
             document.getElementById('editStaffId').value = data.staff_ID;
+            const roles = <?= json_encode($roles) ?>;
+            const roleOptions = roles.map(r =>
+                `<option value="${escHtml(r)}" ${r === data.role ? 'selected' : ''}>${escHtml(r.charAt(0).toUpperCase() + r.slice(1))}</option>`
+            ).join('');
             body.innerHTML = `
                 <div class="form-grid">
                     <div class="form-group">
@@ -693,7 +706,7 @@ function openEdit(staffId) {
                     </div>
                     <div class="form-group">
                         <label class="form-label">Role *</label>
-                        <input type="text" name="role" class="form-control" required value="${escHtml(data.role)}">
+                        <select name="role" class="form-control" required>${roleOptions}</select>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Username *</label>
